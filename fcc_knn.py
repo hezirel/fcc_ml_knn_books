@@ -52,6 +52,8 @@ def clean_dataframes(*dataframes):
 
 
 clean_dataframes(df_users, df_books, df_ratings)
+# Drop duplicates titles and ISBNs
+df_books.drop_duplicates(subset=["title", "isbn"], inplace=True)
 
 pd.set_option("display.max_columns", None)
 user_counts = df_ratings["user_id"].value_counts()
@@ -79,49 +81,30 @@ assert df_ratings["isbn"].isin(popular_books).all(), "Invalid ISBN"
 
 # Function to return recommended books
 def get_recommends(book=""):
-    # 1. Create the ratings pivot table
-    ratings_pivot = df_ratings.pivot(
-        index="isbn", columns="user_id", values="rating"
-    ).fillna(0)
+    knn = NearestNeighbors(metric="cosine", n_jobs=-1)
+    pivot = df_ratings.pivot(index="isbn", columns="user_id", values="rating").fillna(0)
+    model = knn.fit(pivot.values)
 
-    # 2. Fit KNN with the sparse matrix
-    knn = NearestNeighbors(metric="cosine", n_neighbors=6, n_jobs=-1)
-    knn.fit(csr_matrix(ratings_pivot))
+    isbn = df_books[df_books["title"] == book]["isbn"].values[0]
+    distances, isbns = model.kneighbors(
+        pivot.loc[isbn].values.reshape(1, -1), n_neighbors=6
+    )
 
-    # 3. Get the book's ISBN
-    book_isbn = df_books[df_books["title"] == book]["isbn"].values[0]
-
-    # 4. Get the book's ratings vector (keeping the same structure as training data)
-    book_vector = ratings_pivot.loc[[book_isbn]]  # Keep as DataFrame with same columns
-
-    # 5. Find nearest neighbors
-    distances, indices = knn.kneighbors(csr_matrix(book_vector))
-    pp(distances)
-    pp(df_books[df_books["isbn"].isin(ratings_pivot.index[indices.flatten()])]["title"])
-
-    # 6. Get recommende books
-    recommended_isbns = ratings_pivot.index[indices.flatten()]
-    recommended_books = df_books[df_books["isbn"].isin(recommended_isbns)]
-    # Return books and distances, sorted by distance
-
-    recommended_books = [
-        book,
-        [
-            [x, float(y)]
-            for x, y in zip(
-                df_books[df_books["isbn"].isin(recommended_isbns)]["title"],
-                distances.flatten(),
-            )
-        ],
+    rec = [
+        [title, distance]
+        for title, distance in zip(pivot.index[isbns[0]][1:], distances[0][1:])
     ]
-    recommended_books[1].sort(key=lambda x: x[1], reverse=False)
-    # Convert to np to std float
+    for i in range(5):
+        rec[i][0] = df_books[df_books["isbn"] == rec[i][0]]["title"].values[0]
+
+    rec.sort(key=lambda x: x[1], reverse=True)
+
+    recommended_books = [book, rec]
     return recommended_books
 
 
 # Test the recommendation function
 books = get_recommends("Where the Heart Is (Oprah's Book Club (Paperback))")
-pp(books)
 
 
 def test_book_recommendation():
@@ -147,4 +130,4 @@ def test_book_recommendation():
         print("You haven't passed yet. Keep trying!")
 
 
-# test_book_recommendation()
+test_book_recommendation()
